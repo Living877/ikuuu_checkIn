@@ -16,6 +16,8 @@ import os
 import sys
 import time
 import re
+import base64
+from urllib.parse import unquote
 from datetime import datetime
 
 # 保证标准输出支持 UTF-8（防止 Windows 控制台因输出特殊字符抛出 gbk 编码错误）
@@ -315,11 +317,11 @@ def format_gb(gb_val):
 def parse_account_details(rendered_text, html_content=""):
     """
     从浏览器渲染后的文本与 HTML 中解析出剩余流量、已用流量与账户有效期
-    支持饼图卡片结构提取：
-    - 可用 (如 168.59GB)
-    - 今日已用 (如 3.23GB)
-    - 已用 (如 174.61GB)
-    总流量 = 可用 + 今日已用 + 已用 (所有部分全部加起来)
+    支持 originBody Base64 解密与 trafficDountChat 饼图精确提取：
+    - 可用 (如 251.96GB)
+    - 今日已用 (如 3.71GB)
+    - 过去已用 (如 71.36GB)
+    总流量 = 可用 + 今日已用 + 过去已用
     """
     info = {
         'traffic_remain': '未知',
@@ -330,37 +332,62 @@ def parse_account_details(rendered_text, html_content=""):
     }
     content = f"{rendered_text}\n{html_content}"
 
-    # 1. 提取可用/剩余流量
-    m_remain = re.search(r'(?:可用|剩余流量|剩余可用|剩余|未使用)[^\d\n]*[:：\s]*([0-9.]+\s*(?:KB|MB|GB|TB|B))', content, re.I)
-    if m_remain:
-        info['traffic_remain'] = m_remain.group(1).strip()
+    # 0. 若包含 originBody Base64 混淆，先解密真实 HTML
+    m_origin = re.search(r'var originBody\s*=\s*["\']([^"\']+)["\']', content)
+    if m_origin:
+        try:
+            decoded = base64.b64decode(m_origin.group(1)).decode('utf-8', errors='ignore')
+            content = f"{content}\n{decoded}"
+        except Exception:
+            pass
 
-    # 2. 提取今日已用
-    m_today = re.search(r'今日已用[^\d\n]*[:：\s]*([0-9.]+\s*(?:KB|MB|GB|TB|B))', content, re.I)
-    today_str = m_today.group(1).strip() if m_today else ''
+    # 1. 优先从 trafficDountChat 饼图函数中精确提取
+    m_donut = re.search(r'trafficDountChat\(\s*[\'"]([^\'"]+)[\'"]\s*,\s*[\'"]([^\'"]+)[\'"]\s*,\s*[\'"]([^\'"]+)[\'"]', content)
+    if m_donut:
+        past_str = m_donut.group(1).strip()
+        today_str = m_donut.group(2).strip()
+        remain_str = m_donut.group(3).strip()
+        info['traffic_remain'] = remain_str
 
-    # 3. 提取非今日的已用流量（饼图中的“已用”或“过去已用”）
-    m_past = re.search(r'(?:过去已用|(?<!今日)已用)[^\d\n]*[:：\s]*([0-9.]+\s*(?:KB|MB|GB|TB|B))', content, re.I)
-    past_str = m_past.group(1).strip() if m_past else ''
+        remain_gb = parse_traffic_to_gb(remain_str)
+        today_gb = parse_traffic_to_gb(today_str)
+        past_gb = parse_traffic_to_gb(past_str)
 
-    # 计算各分项数值 (GB)
-    remain_gb = parse_traffic_to_gb(info['traffic_remain'])
-    today_gb = parse_traffic_to_gb(today_str)
-    past_gb = parse_traffic_to_gb(past_str)
+        used_total_gb = today_gb + past_gb
+        if used_total_gb > 0:
+            info['traffic_used'] = format_gb(used_total_gb)
 
-    # 计算总已用流量与总流量
-    used_total_gb = today_gb + past_gb
-    if used_total_gb > 0:
-        info['traffic_used'] = format_gb(used_total_gb)
-    elif past_gb > 0:
-        info['traffic_used'] = format_gb(past_gb)
-    elif today_gb > 0:
-        info['traffic_used'] = format_gb(today_gb)
+        total_sum_gb = remain_gb + today_gb + past_gb
+        if total_sum_gb > 0:
+            info['traffic_total'] = format_gb(total_sum_gb)
 
-    # 总流量 = 可用(剩余) + 今日已用 + 历史已用 (所有部分全部加起来)
-    total_sum_gb = remain_gb + today_gb + past_gb
-    if total_sum_gb > 0:
-        info['traffic_total'] = format_gb(total_sum_gb)
+    # 2. 保底正则提取
+    if info['traffic_remain'] == '未知':
+        m_counter = re.search(r'<span class="counter">([0-9.]+)</span>\s*([KMGT]?B)', content, re.I)
+        if m_counter:
+            info['traffic_remain'] = f"{m_counter.group(1)} {m_counter.group(2).upper()}"
+        else:
+            m_remain = re.search(r'(?:可用|剩余流量|剩余可用|剩余|未使用)[^\d\n]*[:：\s]*([0-9.]+\s*(?:KB|MB|GB|TB|B))', content, re.I)
+            if m_remain:
+                info['traffic_remain'] = m_remain.group(1).strip()
+
+        m_today = re.search(r'今日已用[^\d\n]*[:：\s]*([0-9.]+\s*(?:KB|MB|GB|TB|B))', content, re.I)
+        today_str = m_today.group(1).strip() if m_today else ''
+
+        m_past = re.search(r'(?:过去已用|(?<!今日)已用)[^\d\n]*[:：\s]*([0-9.]+\s*(?:KB|MB|GB|TB|B))', content, re.I)
+        past_str = m_past.group(1).strip() if m_past else ''
+
+        remain_gb = parse_traffic_to_gb(info['traffic_remain'])
+        today_gb = parse_traffic_to_gb(today_str)
+        past_gb = parse_traffic_to_gb(past_str)
+
+        used_total_gb = today_gb + past_gb
+        if used_total_gb > 0:
+            info['traffic_used'] = format_gb(used_total_gb)
+
+        total_sum_gb = remain_gb + today_gb + past_gb
+        if total_sum_gb > 0:
+            info['traffic_total'] = format_gb(total_sum_gb)
 
     # 2. 提取到期时间与天数
     if re.search(r'(?:永久有效|无限期|长期有效)', content):
@@ -449,9 +476,35 @@ def playwright_login_and_fetch_info(email, passwd, base_url):
         except Exception:
             print('未找到验证按钮，继续登录')
 
-        time.sleep(2)
+        # 检测极验状态并等待（最多等待 6 秒）
+        captcha_ready = False
+        captcha_has_modal = False
+        for _ in range(6):
+            time.sleep(1)
+            try:
+                captcha_ready = page.evaluate("() => window.Captcha ? window.Captcha.isReady() : false")
+                captcha_has_modal = page.evaluate("""() => {
+                    const b = document.querySelector('.geetest_box_wrap') || document.querySelector('.geetest_window');
+                    return b && window.getComputedStyle(b).display !== 'none';
+                }""")
+            except Exception:
+                pass
+            if captcha_ready:
+                print('极验验证已就绪 (isReady=True)')
+                break
+            if captcha_has_modal:
+                print('⚠️ 极验弹出了图形/点选验证码，无头环境被风控拦截')
+                break
+
         print('点击登录提交按钮...')
-        page.click('button[type="submit"]')
+        try:
+            # 采用强制点击与 JS 触发，彻底避免被极验浮层遮挡导致的 30s 超时崩溃
+            page.click('button[type="submit"]', force=True, timeout=5000)
+        except Exception:
+            try:
+                page.evaluate("() => typeof submitLogin === 'function' ? submitLogin() : document.querySelector('.login')?.click()")
+            except Exception as e:
+                print(f"触发提交按钮异常: {e}")
 
         # 2. 等待登录响应与页面跳转
         time.sleep(5)
@@ -468,10 +521,113 @@ def playwright_login_and_fetch_info(email, passwd, base_url):
         except Exception as e:
             print(f"[读取用户中心页面异常] {e}")
 
-        cookies = context.cookies()
+        all_cookies = context.cookies()
+        # 严格校验是否获取到关键登录凭证（uid 或 key）
+        has_login_auth = any(c.get('name') in ['uid', 'key'] for c in all_cookies)
+        cookies = all_cookies if has_login_auth else []
         browser.close()
 
     return cookies, user_info
+
+
+# ─────────────────────────────────────────────
+# Cookie 凭据直签与资产获取（高可用免密模式）
+# ─────────────────────────────────────────────
+def checkin_with_cookie(cookie_str, base_url):
+    """
+    使用 Cookie 凭据直接免密签到并抓取账户资产
+    完全绕过登录页面和极验图片验证码，生产级高可用
+    """
+    record = {
+        'real_email': 'Cookie账号',
+        'safe_email': 'Cookie账号',
+        'success': False,
+        'status_text': '未知',
+        'traffic_remain': '未知',
+        'traffic_used': '',
+        'traffic_total': '',
+        'expire_status': '未知'
+    }
+
+    session = requests.Session()
+    cookie_items = [c.strip() for c in cookie_str.split(';') if '=' in c]
+    cookie_dict = {}
+    for item in cookie_items:
+        k, v = item.split('=', 1)
+        cookie_dict[k.strip()] = v.strip()
+        session.cookies.set(k.strip(), v.strip())
+
+    cookie_email = unquote(cookie_dict.get('email', '')).strip()
+    if cookie_email:
+        record['real_email'] = cookie_email
+        record['safe_email'] = mask_email(cookie_email)
+
+    safe_name = record['safe_email']
+    print(f"\n[Cookie 模式] 开始验证并签到账号: {safe_name}")
+
+    # 1. 验证 Cookie 有效性并获取资产页面
+    user_url = f"{base_url.rstrip('/')}/user"
+    try:
+        resp = session.get(user_url, headers={'User-Agent': USER_AGENT}, timeout=15, allow_redirects=True)
+        if resp.status_code == 200:
+            if '/auth/login' in resp.url or ('登录' in resp.text and '用户中心' not in resp.text and '节点列表' not in resp.text):
+                record['status_text'] = "❌ Cookie 已失效或过期，请重新获取"
+                print(f"[Cookie 模式] 账号 {safe_name} Cookie 已失效，重定向至登录页")
+                return record
+
+            user_info = parse_account_details(resp.text, resp.text)
+            record['traffic_remain'] = user_info['traffic_remain']
+            record['traffic_used'] = user_info.get('traffic_used', '').strip()
+            record['traffic_total'] = user_info.get('traffic_total', '').strip()
+            record['expire_status'] = user_info['expire_status']
+
+            if record['real_email'] == 'Cookie账号':
+                m_email = re.search(r'([a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+)', resp.text)
+                if m_email:
+                    record['real_email'] = m_email.group(1)
+                    record['safe_email'] = mask_email(m_email.group(1))
+        else:
+            record['status_text'] = f"❌ 访问用户中心失败: HTTP {resp.status_code}"
+            return record
+    except Exception as e:
+        record['status_text'] = f"❌ 用户中心访问异常: {e}"
+        return record
+
+    # 2. 发起签到请求
+    check_url = f"{base_url.rstrip('/')}/user/checkin"
+    headers = {
+        'Origin': base_url.rstrip('/'),
+        'Referer': user_url,
+        'User-Agent': USER_AGENT
+    }
+    try:
+        print("[Cookie 模式] 正在发送签到请求...")
+        check_resp = session.post(check_url, headers=headers, timeout=15)
+        try:
+            result = check_resp.json()
+            msg = result.get('msg', '未知响应')
+            ret = result.get('ret', 0)
+            print(f"[Cookie 模式] 签到响应: {result}")
+        except Exception:
+            msg = check_resp.text[:100] if check_resp.text else '无响应内容'
+            ret = 0
+
+        if ret == 1 or '获得' in msg:
+            record['success'] = True
+            record['status_text'] = f"✅ 签到成功 ({msg})"
+        elif '已经签到' in msg or '已签到' in msg:
+            record['success'] = True
+            record['status_text'] = f"ℹ️ {msg}"
+        else:
+            record['success'] = False
+            record['status_text'] = f"⚠️ {msg}"
+
+    except Exception as e:
+        record['success'] = False
+        record['status_text'] = f"❌ 签到请求异常: {e}"
+
+    print(f"账号 {record['safe_email']} 汇总: {record['status_text']} | 剩余: {record['traffic_remain']} | 已用: {record['traffic_used']} | 总计: {record['traffic_total']} | 到期: {record['expire_status']}")
+    return record
 
 
 # ─────────────────────────────────────────────
@@ -501,7 +657,16 @@ def checkin_one_account(email, passwd, base_url):
         # 1. 登录并提取页面资产数据
         pw_cookies, user_info = playwright_login_and_fetch_info(email, passwd, base_url)
         if not pw_cookies:
-            raise Exception('未获取到 Cookie，可能登录失败或被拦截')
+            raise Exception('登录未成功（站点开启了图片验证码拦截），请运行 scripts/login_helper.py 获取 Cookie 并配置 IKUUU_COOKIE 免密直签')
+
+        # 成功获取 Cookie 时自动在本地保存一份
+        try:
+            cookie_str = "; ".join([f"{c['name']}={c['value']}" for c in pw_cookies if 'name' in c and 'value' in c])
+            cookie_file = os.path.join(os.path.dirname(__file__), 'scripts', 'local_cookie.txt')
+            with open(cookie_file, 'w', encoding='utf-8') as f:
+                f.write(cookie_str)
+        except Exception:
+            pass
 
         session = requests.session()
         for c in pw_cookies:
@@ -559,10 +724,15 @@ def simplify_status(raw_status):
     m = re.search(r'获得[^\d]*([0-9.]+\s*[KMGT]?B)', raw_status)
     if m:
         return f"签到成功 (+{m.group(1).strip()})"
+    if '失败' in raw_status or '未成功' in raw_status or '异常' in raw_status or '失效' in raw_status:
+        if '图片验证码' in raw_status or '风控' in raw_status:
+            return '登录失败 (触发图片验证码)'
+        if 'Cookie 已失效' in raw_status:
+            return '签到失败 (Cookie已失效)'
+        cleaned = raw_status.replace('❌', '').replace('失败:', '').replace('处理异常:', '').strip()
+        return cleaned[:30] if cleaned else '签到失败'
     if '成功' in raw_status:
         return '签到成功'
-    if '失败' in raw_status:
-        return raw_status.replace('❌', '').replace('失败:', '').strip() or '签到失败'
     return raw_status.strip()
 
 
@@ -615,33 +785,65 @@ def handler(event=None, context=None):
         base_url = get_target_domain()
         print(f"\n当前生效的目标域名: {base_url}")
 
-        accounts_str = os.environ.get('ACCOUNTS')
-        if not accounts_str:
-            raise Exception('未配置 ACCOUNTS 环境变量，请在 GitHub Secrets 中设置')
+        # 1. 优先检测 Cookie 配置（环境变量 IKUUU_COOKIE / COOKIES / COOKIE 或本地 local_cookie.txt）
+        cookies_list = []
+        raw_cookie = os.environ.get('IKUUU_COOKIE') or os.environ.get('COOKIES') or os.environ.get('COOKIE')
+        if not raw_cookie:
+            # 探测本地凭据缓存文件
+            local_cookie_path = os.path.join(os.path.dirname(__file__), 'scripts', 'local_cookie.txt')
+            if not os.path.exists(local_cookie_path):
+                local_cookie_path = os.path.join(os.path.dirname(__file__), 'local_cookie.txt')
+            if os.path.exists(local_cookie_path):
+                try:
+                    with open(local_cookie_path, 'r', encoding='utf-8') as f:
+                        raw_cookie = f.read().strip()
+                    if raw_cookie:
+                        print(f"[凭据加载] 成功从本地缓存文件读取到 Cookie: {local_cookie_path}")
+                except Exception:
+                    pass
 
-        accounts = []
-        for line in accounts_str.strip().splitlines():
-            line = line.strip()
-            if line and ':' in line:
-                email, passwd = line.split(':', 1)
-                accounts.append((email.strip(), passwd.strip()))
-
-        if not accounts:
-            raise Exception('未从 ACCOUNTS 环境变量中读取到有效账号（请按 邮箱:密码 格式配置）')
-
-        print(f'\n共发现 {len(accounts)} 个账号，开始执行签到流程')
+        if raw_cookie:
+            for line in raw_cookie.strip().splitlines():
+                line = line.strip()
+                if line and '=' in line and ('uid=' in line or 'key=' in line):
+                    cookies_list.append(line)
 
         records = []
-        for idx, (email, passwd) in enumerate(accounts, 1):
-            print('\n' + '=' * 50)
-            print(f'开始处理第 {idx} / {len(accounts)} 个账号')
-            print('=' * 50)
-            rec = checkin_one_account(email, passwd, base_url)
-            records.append(rec)
+        if cookies_list:
+            print(f"\n检测到配置了 {len(cookies_list)} 个 Cookie，启用高可靠免密直签模式（完全无视任何图片验证码）")
+            for idx, c in enumerate(cookies_list, 1):
+                print('\n' + '=' * 50)
+                print(f'开始处理第 {idx} / {len(cookies_list)} 个 Cookie 账号')
+                print('=' * 50)
+                rec = checkin_with_cookie(c, base_url)
+                records.append(rec)
+        else:
+            # 2. 若未配置 Cookie，回退到账号密码 Playwright 登录模式
+            accounts_str = os.environ.get('ACCOUNTS')
+            if not accounts_str:
+                raise Exception('未配置 IKUUU_COOKIE 或 ACCOUNTS 环境变量！若遇图片验证码，推荐配置 IKUUU_COOKIE 免密直签')
 
-        # 1. GitHub Actions 日志输出：账号全脱敏加密保护隐私
+            accounts = []
+            for line in accounts_str.strip().splitlines():
+                line = line.strip()
+                if line and ':' in line:
+                    email, passwd = line.split(':', 1)
+                    accounts.append((email.strip(), passwd.strip()))
+
+            if not accounts:
+                raise Exception('未从 ACCOUNTS 环境变量中读取到有效账号（请按 邮箱:密码 格式配置）')
+
+            print(f'\n共发现 {len(accounts)} 个账号，开始执行 Playwright 自动化登录签到流程')
+            for idx, (email, passwd) in enumerate(accounts, 1):
+                print('\n' + '=' * 50)
+                print(f'开始处理第 {idx} / {len(accounts)} 个账号')
+                print('=' * 50)
+                rec = checkin_one_account(email, passwd, base_url)
+                records.append(rec)
+
+        # 1. 日志输出（脱敏）
         log_message = build_notification_message(records, base_url, masked=True)
-        print('\n' + '=' * 20 + ' Actions 日志预览(已脱敏加密) ' + '=' * 20)
+        print('\n' + '=' * 20 + ' 签到日志预览(已脱敏加密) ' + '=' * 20)
         print(log_message)
 
         # 2. 外部通知推送（企业微信/PushPlus）：使用真实明文账号方便识别

@@ -32,11 +32,12 @@
 2. 在左侧栏点击 **Secrets and variables** → **Actions**
 3. 点击 **New repository secret** 按钮添加以下变量：
 
-#### 1. 必填参数
+#### 1. 认证参数（二选一或同时配置）
 
-| 参数名 | 是否必须 | 说明与格式示例 |
+| 参数名 | 推荐度 | 说明与格式示例 |
 | :--- | :---: | :--- |
-| **`ACCOUNTS`** | **是** | 账号与密码列表，**一行一个**，英文冒号分隔：<br/>`user1@gmail.com:password123`<br/>`user2@qq.com:password456` |
+| **`IKUUU_COOKIE`** | ⭐⭐⭐ 极力推荐 | **账号 Cookie 凭据（彻底绕过图片验证码）**：<br/>当站点开启极验图片验证码（九宫格/汉字点选）时，配置 Cookie 可 100% 稳定直签。<br/>格式：`uid=xxx; email=xxx; key=xxx`<br/>*(可运行本地脚本 `python scripts/login_helper.py` 一键自动抓取并同步)* |
+| **`ACCOUNTS`** | 常用兜底 | **账号密码列表**：一行一个，英文冒号分隔：<br/>`user1@gmail.com:password123`<br/>`user2@qq.com:password456` |
 
 #### 2. 推送配置（按需选择任一或多个）
 
