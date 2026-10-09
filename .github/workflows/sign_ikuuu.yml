@@ -1,49 +1,33 @@
 name: iKuuu 机场自动签到
-
 on:
   schedule:
     # 每天 UTC 23:10（北京时间次日 07:10）自动执行
     - cron: '10 23 * * *'
   workflow_dispatch:
-
 jobs:
   sign_in_job:
-    name: 自动签到与消息推送
+    name: 自动签到与钉钉消息推送
     runs-on: ubuntu-latest
-
     steps:
       - name: 检出代码仓库
         uses: actions/checkout@v4
-
       - name: 配置 Python 环境
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
       - name: 安装项目依赖
         run: |
           pip install requests
           pip install playwright
-
       - name: 安装 Playwright 浏览器及其系统依赖
         run: |
           playwright install --with-deps chromium
-
-      - name: 执行签到与资产统计推送
+      - name: 执行签到 + 钉钉推送
         env:
           IKUUU_COOKIE: ${{ secrets.IKUUU_COOKIE }}
           ACCOUNTS: ${{ secrets.ACCOUNTS }}
           IKUUU_DOMAIN: ${{ secrets.IKUUU_DOMAIN }}
-          # 企业微信单变量合并配置（推荐）
-          WECHAT_WORK: ${{ secrets.WECHAT_WORK }}
-          WX_CONFIG: ${{ secrets.WX_CONFIG }}
-          # 企业微信旧独立变量（兼容回退）
-          WX_CORPID: ${{ secrets.WX_CORPID }}
-          WX_CORPSECRET: ${{ secrets.WX_CORPSECRET }}
-          WX_AGENTID: ${{ secrets.WX_AGENTID }}
-          # 企业微信群机器人
-          WX_WEBHOOK: ${{ secrets.WX_WEBHOOK }}
-          # PushPlus 推送
-          PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
-          PUSH_PLUS_TOKEN: ${{ secrets.PUSH_PLUS_TOKEN }}
+          # 钉钉群机器人 Webhook
+          DINGTALK_WEBHOOK: ${{ secrets.DINGTALK_WEBHOOK }}
+          DINGTALK_SECRET: ${{ secrets.DINGTALK_SECRET }}
         run: python sign_ikuuu.py
