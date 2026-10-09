@@ -27,7 +27,6 @@ jobs:
           IKUUU_COOKIE: ${{ secrets.IKUUU_COOKIE }}
           ACCOUNTS: ${{ secrets.ACCOUNTS }}
           IKUUU_DOMAIN: ${{ secrets.IKUUU_DOMAIN }}
-          # 钉钉自定义机器人
           DINGTALK_WEBHOOK: ${{ secrets.DINGTALK_WEBHOOK }}
           DINGTALK_SECRET: ${{ secrets.DINGTALK_SECRET }}
         run: python sign_ikuuu.py
