@@ -14,6 +14,7 @@
   - **企业微信自建应用**：支持**单变量合并配置**（无需再创建 3 个 Secret）。
   - **PushPlus 微信推送**：只需一个 Token 即可推送到微信。
   - **企业微信群机器人**：支持 Webhook 地址直推。
+  - **钉钉群机器人**：支持 Webhook 直推，兼容「加签」与「自定义关键词」两种安全设置。
 - ⏰ **云端定时与防休眠**：预设每日定时自动运行，并内置 `.github/workflows/keepalive.yml` 保持 Actions 活跃，避免 GitHub 自动停用工作流。
 
 ---
@@ -46,6 +47,8 @@
 | **`WECHAT_WORK`** | ⭐⭐⭐ 极力推荐 | **企业微信应用合并配置**（单变量即可生效）：<br/>格式：`企业ID,应用Secret,应用AgentId`<br/>示例：`ww1234567890abcdef,abcdefghijklmnopqrstuvwxyz123456,1000002`<br/>*(支持逗号 `,`、分号 `;` 或冒号 `:` 分隔)* |
 | **`PUSHPLUS_TOKEN`** | ⭐⭐⭐ 极力推荐 | **PushPlus 推送 Token**：<br/>前往 [pushplus 官网](https://www.pushplus.plus/) 获取一对一微信推送 Token。 |
 | **`WX_WEBHOOK`** | 可选 | **企业微信群机器人 Webhook 地址**：<br/>直接填入群机器人的完整 Webhook URL。 |
+| **`DINGTALK_WEBHOOK`** | 可选 | **钉钉群机器人 Webhook 地址**：<br/>钉钉群 → 群设置 → 智能群助手 → 添加机器人 → 自定义 → 复制 Webhook，形如 `https://oapi.dingtalk.com/robot/send?access_token=xxxx`。 |
+| **`DINGTALK_SECRET`** | 可选 | **钉钉机器人加签密钥**：<br/>机器人安全设置选「加签」时，填入 `SEC` 开头的完整字符串；若选「自定义关键词」，则此项留空，但消息正文须含关键词（默认已带上「签到」二字）。<br/>⚠️ 请勿开启「IP 地址（段）」白名单——GitHub Actions 出口 IP 不固定，会导致推送全部失败。 |
 
 #### 3. 可选高级参数
 

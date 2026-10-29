@@ -17,7 +17,9 @@ import sys
 import time
 import re
 import base64
-from urllib.parse import unquote
+import hashlib
+import hmac
+from urllib.parse import unquote, quote_plus
 from datetime import datetime
 
 # 保证标准输出支持 UTF-8（防止 Windows 控制台因输出特殊字符抛出 gbk 编码错误）
@@ -127,6 +129,56 @@ def send_pushplus(title, content, token):
         return False
 
 
+def send_dingtalk(msg, webhook_url, secret=''):
+    """
+    钉钉自定义机器人通知
+    - webhook_url: https://oapi.dingtalk.com/robot/send?access_token=xxxx
+    - secret: 机器人「加签」里的 SEC 开头字符串；用「自定义关键词」方式的可留空
+    注意：钉钉 text 消息正文上限 20000 字节
+    """
+    webhook_url = (webhook_url or '').strip()
+    secret = (secret or '').strip()
+    if not webhook_url:
+        return False
+
+    url = webhook_url
+    if secret:
+        timestamp = str(round(time.time() * 1000))
+        string_to_sign = f'{timestamp}\n{secret}'
+        hmac_code = hmac.new(
+            secret.encode('utf-8'),
+            string_to_sign.encode('utf-8'),
+            digestmod=hashlib.sha256,
+        ).digest()
+        sign = quote_plus(base64.b64encode(hmac_code))
+        sep = '&' if '?' in url else '?'
+        url = f'{url}{sep}timestamp={timestamp}&sign={sign}'
+
+    payload = {
+        'msgtype': 'text',
+        'text': {'content': msg},
+        'at': {'isAtAll': False},
+    }
+
+    try:
+        resp = requests.post(url, json=payload, timeout=10).json()
+        errcode = resp.get('errcode')
+        print(f"[钉钉机器人通知] {resp}")
+        if errcode != 0:
+            hints = {
+                310000: '签名或关键词校验失败：DINGTALK_SECRET 与机器人「加签」不一致，或正文没含你设置的「自定义关键词」',
+                300001: 'access_token 无效，请重新复制机器人 Webhook 地址',
+                130101: '消息内容含敏感词或为空',
+            }
+            if errcode in hints:
+                print(f'💡 钉钉提示：{hints[errcode]}')
+            return False
+        return True
+    except Exception as e:
+        print(f"[钉钉机器人通知异常] {e}")
+        return False
+
+
 def dispatch_notifications(title, message):
     """统一派发所有已配置渠道的通知"""
     # 1. 企业微信自建应用
@@ -146,6 +198,14 @@ def dispatch_notifications(title, message):
     if pushplus_token:
         print("[消息推送] 正在发送 PushPlus 通知...")
         send_pushplus(title, message, pushplus_token)
+
+    # 4. 钉钉群机器人（配合 workflow 中的 DINGTALK_WEBHOOK / DINGTALK_SECRET）
+    dingtalk_webhook = (os.environ.get('DINGTALK_WEBHOOK') or '').strip()
+    dingtalk_secret = (os.environ.get('DINGTALK_SECRET') or '').strip()
+    if dingtalk_webhook:
+        print("[消息推送] 正在发送钉钉机器人通知...")
+        # 「自定义关键词」安全设置要求正文必须含关键词，所以把标题一起带上
+        send_dingtalk(f'{title}\n{message}', dingtalk_webhook, dingtalk_secret)
 
 
 # ─────────────────────────────────────────────
